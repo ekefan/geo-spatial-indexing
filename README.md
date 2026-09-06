@@ -3,6 +3,58 @@
 This task is focused on designing and implementing a geo-bucket based location normalization system for property search.
 Read [DESIGN.md](DESIGN.md) for architecture, bucketing strategy, database schema, location matching logic and operation flow of the system.
 
+## Project Structure
+
+```text
+geo-spatial-indexing/
+├── src/
+│   ├── main.py                  # FastAPI application
+│   ├── property.py              # Property API routes
+│   ├── geo_bucket.py            # Bucket stats route
+│   ├── models.py                # Request and response models
+│   ├── locations.py             # Name normalization and H3 helpers
+│   ├── database/
+│   │   ├── __init__.py
+│   │   ├── db.py                # Engine and session dependency
+│   │   └── models.py            # SQLAlchemy table models
+│   └── repositories/
+│       ├── __init__.py
+│       ├── property.py          # Property transactions and search
+│       └── geo_bucket.py        # Bucket upserts and stats queries
+├── migrations/
+│   ├── env.py                  # Alembic configuration
+│   ├── script.py.mako          # Migration template
+│   └── versions/               # Versioned schema changes
+├── tests/
+│   ├── conftest.py             # Shared test data
+│   ├── unit/                   # Validation, helpers, and mocked API tests
+│   │   ├── conftest.py
+│   │   ├── test_locations.py
+│   │   ├── test_models.py
+│   │   ├── test_property.py
+│   │   └── test_geo_bucket.py
+│   └── integration/            # Real PostGIS tests using Testcontainers
+│       ├── conftest.py
+│       ├── test_property.py
+│       ├── test_geo_bucket.py
+│       ├── test_seed.py
+│       └── database/
+│           └── test_models.py
+├── seed.py                     # Repeatable sample data
+├── compose.yml                 # PostgreSQL and PostGIS service
+├── alembic.ini
+├── Makefile                    # Migration and seed commands
+├── install-tools.sh
+├── pyproject.toml              # Dependencies and test configuration
+├── uv.lock
+├── .env.example
+├── DESIGN.md                   # Architecture and trade-offs
+├── db_schema.png
+├── bucket_strategy.png
+├── property_flow.png
+└── README.md
+```
+
 ## Setup
 
 Requires Python 3.14, uv, and Docker Compose.
@@ -44,4 +96,3 @@ The test suite ignores your application `DATABASE_DSN` and never uses its rows.
 Integration tests use FastAPI's TestClient with real PostGIS sessions, including
 all three Sangotedo addresses, typo matching, and repeated Python seeding.
 No separate HTTP server is started during tests.
-

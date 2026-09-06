@@ -1,151 +1,173 @@
-# Geo-bucket property API
+# Geo-spatial Property Indexing and Retrieval
 
-## Scope and assumptions
+The goal is to return properties in the same area even when users write the
+location differently. We combine geographic grouping with location aliases:
+coordinates determine the bucket, while names help users find it.
 
-This MVP serves Lagos property searches. A neighbourhood is a human place name,
-not an H3 cell. Labels are supplied by users and are not independently geocoded.
-Prices are integers in kobo, with currency NGN and multiplier 100. No listing
-authentication, updates, deletion, or external geocoding is included.
+The stack is FastAPI, SQLAlchemy, PostgreSQL with PostGIS, H3, and `pg_trgm`.
+Alembic manages the database schema. Setup commands are in [README.md](README.md).
 
-## Geographic grouping
+## Assumptions
 
-Each coordinate maps deterministically to an H3 resolution-8 cell. Its average
-hexagon area is approximately 0.737 km² and average edge length about 531 m;
-individual cells vary. Store the true H3 centre and polygon as PostGIS geography
-with SRID 4326. Geography area calculations return square metres. SQL points
-use longitude first; H3's Python API accepts latitude first.
+- The initial use case is neighbourhood searches in Lagos.
+- Users supply coordinates; we do not verify them through an external geocoder.
+- A neighbourhood can span several buckets, and a bucket can overlap named areas.
+- The API accepts an integer price in kobo. Currency `NGN` and multiplier `100`
+  are assigned internally.
+- City-wide searches and official neighbourhood boundaries are outside this version.
 
-A cell is a fixed grid unit, not a radius-based cluster. No distance threshold
-or insertion-order-dependent nearest-centre decision is needed. Close properties
-can occupy different cells. Every observed label registers aliases in its own
-cell, and search retrieves every matching cell without a five-cell cap.
+## Geo-Bucket Strategy
 
-We do not automatically include neighbouring cells: that would add locations
-for which there is no matching alias. A neighbourhood can span multiple cells;
-a cell can overlap several named areas. Returning all properties in a matched
-cell deliberately approximates neighbourhood membership.
+We use **H3 resolution 8**. H3 divides the map into cells, mostly hexagons, with
+an average hexagon area of approximately **0.74 km²** at this resolution.
+Actual cell areas vary.
 
-## Schema and indexes
+![H3 grid grouping nearby properties into geographic cells](bucket_strategy.png)
 
-![Database schema showing properties, geo buckets, and bucket aliases](db_schema.png)
+Each property's latitude and longitude produce an H3 cell ID. Properties with
+the same cell ID share a bucket. If that bucket does not exist, we create it.
+The bucket stores the H3 cell's centre and boundary, not the first property's
+coordinates.
 
-```text
-geo_buckets (UUID PK, unique H3 cell, centroid, boundary)
-    | 1                         | 1
-    |                           |
-    v many                      v many
-properties                  bucket_aliases
-(UUID PK, bucket FK,         (bucket FK, normalized alias)
- title, raw name,            composite primary key
- coordinates, price,
- currency, rooms, timestamps)
-```
+There is no extra radius or distance threshold. Assignment follows the grid and
+does not depend on which property was added first. Two nearby properties can
+fall on opposite sides of a cell boundary; registering aliases in both buckets
+lets the same neighbourhood search find them.
 
-- `geo_buckets.h3_index` has a unique B-tree index for deterministic upserts.
-- GiST indexes on bucket centroid and boundary support spatial queries.
-- `properties(bucket_id, created_at, id)` supports bucket-based lookup.
-- Alias B-tree supports exact matching; `GIN(alias gin_trgm_ops)` supports typo
-  candidate lookup using the `%` operator.
-- Required fields, coordinate limits, nonnegative prices/room counts, and positive
-  currency multipliers are validated in the API and/or database constraints.
-- Property foreign keys restrict deleting occupied buckets; alias foreign keys
-  cascade when a bucket is removed. Repeated aliases within a cell are unique.
+Resolution 8 gives us relatively small groups for neighbourhood searches without
+needing a boundary dataset. It is an approximation, not an official definition
+of a neighbourhood.
 
-Counts are computed directly. There are no denormalized counters to reconcile
-on failed or concurrent writes. Exact global counts and area aggregates require
-work proportional to the relevant rows and are not constant-time operations.
+## Database Schema
 
-## Ingestion and transactions
+![Database schema with properties, geo buckets, and bucket aliases](db_schema.png)
 
-`POST /api/properties` validates the request, computes H3 geometry, upserts the
-bucket with `ON CONFLICT DO NOTHING`, finds its ID, upserts aliases, and inserts
-the property. One transaction encloses all steps. The unique H3 constraint
-serializes competing creation of the same cell; alias uniqueness handles repeat
-labels. A failed property insert rolls back newly created buckets and aliases.
-Repeated POSTs intentionally create distinct listings; no idempotency key exists.
+| Table | Purpose |
+| --- | --- |
+| `geo_buckets` | Stores a UUID, unique H3 cell ID, centre, boundary, and creation time. |
+| `properties` | Stores listing details, original location name, coordinates, price, rooms, timestamps, and `bucket_id`. |
+| `bucket_aliases` | Links normalized location names to buckets. |
 
-Synchronous SQLAlchemy sessions run in synchronous FastAPI handlers. Each request
-gets its own session; connections are pooled and returned when the session closes.
+Each property belongs to one bucket through `properties.bucket_id`. Each bucket
+can have many properties and aliases. The composite primary key
+`(bucket_id, alias)` prevents duplicate aliases within a bucket while allowing
+the same name across different buckets.
 
-## Name matching
+Foreign keys prevent references to missing buckets. Deleting an occupied bucket
+is restricted; deleting an empty bucket removes its aliases.
 
-1. Unicode NFKC normalization, case folding, punctuation removal, and whitespace
-   collapse produce a normalized full label.
-2. Register the full label and a primary alias obtained by removing explicit
-   trailing `Ajah` and `Lagos` qualifiers while preserving at least one word.
-   This makes all three supplied Sangotedo labels register `sangotedo`.
-   Multiword names such as `Victoria Island` remain intact.
-3. Normalize search the same way. Match full/primary aliases exactly first.
-4. If no exact match exists and the normalized query has at least three
-   characters, use pg_trgm `%` with a transaction-local threshold of 0.3.
-   This is a heuristic, not a guarantee of semantic equivalence.
-5. Fetch properties through the matching bucket-ID subquery, using `IN` to avoid
-   duplicates from multiple aliases. Return total count and a page ordered by
-   creation time and UUID. Defaults: limit 50; maximum 100; offset starts at zero.
+### Indexes
 
-```text
-User text -> normalization -> indexed exact alias lookup
-                                      |
-                               no match? trigram lookup
-                                      |
-                               matching bucket IDs
-                                      |
-                           properties.bucket_id lookup
-                                      |
-                          ordered, paginated properties
-```
+| Index | Purpose |
+| --- | --- |
+| Unique `geo_buckets.h3_index` | Finds existing cells and prevents duplicate buckets. |
+| GiST on bucket centre and boundary | Supports spatial queries on PostGIS geography values. |
+| `properties(bucket_id, created_at, id)` | Supports property lookup by bucket. |
+| B-tree on `bucket_aliases.alias` | Supports exact name lookup. |
+| GIN on aliases with `gin_trgm_ops` | Supports typo-tolerant lookup. |
 
-The text never needs to be compared against every property row. An exact match
-takes precedence over fuzzy candidates to reduce unrelated results. The threshold
-can still produce false positives and needs a larger labelled evaluation set.
-Two geographically distant places with the same name can both match; a future
-city/map-centre filter would disambiguate them. Broad searches for `Ajah` do not
-promise every child neighbourhood without a geographic hierarchy.
+The centre and boundary use SRID 4326. Properties retain numeric latitude and
+longitude; they do not currently have their own spatial point index.
 
-## Stats and coverage
+## Location Matching Logic
 
-`GET /api/geo-buckets/stats` returns total buckets, total properties, paginated
-per-bucket counts, and coverage. Coverage is the sum of the actual areas of
-occupied H3 cells in km² plus the bounding box of property coordinates. It is
-not building footprint area or the official area of a neighbourhood. Empty
-results have zero area and null bounds. Aggregates are live, so concurrent writes
-can make separate stats statements reflect slightly different instants.
+We normalize names by applying Unicode normalization, ignoring case, replacing
+punctuation with spaces, and collapsing repeated whitespace.
 
-## Verification
+We save the normalized full name and a shorter alias after removing known
+trailing qualifiers: `Ajah` and `Lagos`. Multiword names such as `Victoria Island`
+stay intact.
 
-Tests mirror the source modules under `tests/unit` and `tests/integration`.
-Unit tests mock database dependencies to verify HTTP validation and responses.
-Integration tests start a disposable PostGIS container through Testcontainers,
-run real migrations and `alembic check`, and clear application tables between
-cases. Cases cover the three labels, case differences, typos, unrelated areas,
-adjacent cells, pagination, counts, foreign keys, alias uniqueness, and rollback
-after a real constraint violation. FastAPI's TestClient exercises the three
-addresses with real sessions against the container's database. No separate HTTP
-server is started. Containers are cleaned up afterward; the developer's
-application database is never used.
+| Input | Stored aliases |
+| --- | --- |
+| `Sangotedo` | `sangotedo` |
+| `sangotedo` | `sangotedo` |
+| `Sangotedo, Ajah` | `sangotedo ajah`, `sangotedo` |
+| `sangotedo lagos` | `sangotedo lagos`, `sangotedo` |
 
-`seed.py` includes three Sangotedo variants plus Ikeja and Victoria Island.
-Its fixed property IDs make repeated execution safe. H3 cell IDs and polygons
-are generated using the same helpers as ingestion.
+Search uses the same normalization. It tries exact aliases first. If none match,
+queries of at least three normalized characters use PostgreSQL trigram matching
+with a threshold of **0.3**. This lets a typo such as `sangotdeo` find the seeded
+Sangotedo properties. Shorter queries use exact matching only.
 
-## Scaling and alternatives
+Matching aliases identify buckets, then the API retrieves properties through
+their bucket IDs. It does not compare the search text against every property.
+Multiple matching aliases do not duplicate a property in the results.
 
-At 500,000 properties, keep text lookup on aliases and property retrieval on
-bucket IDs. Measure representative queries with `EXPLAIN (ANALYZE, BUFFERS)`;
-no latency claim follows from an index alone. Large matches, exact counts, deep
-offsets, and sorting remain costs. Start with bounded responses and pooling;
-then consider keyset pagination, cached stats, and cached alias-to-cell mappings.
+Searching `Lagos` alone does not automatically find every Lagos neighbourhood.
+The system has aliases, not a city-to-neighbourhood hierarchy. Similarly, fuzzy
+matching is a useful approximation and can produce false positives.
 
-Radius buckets with PostGIS `ST_DWithin` are a valid indexed alternative, but
-text queries still need coordinates and bucket centres need a selection rule.
-Administrative polygons give clearer membership when reliable boundaries exist;
-informal neighbourhoods often lack them. H3 resolution 7 has larger cells and
-mixes more neighbourhoods. Resolution 8 is a practical MVP compromise.
+## Property Creation
 
-With more time: curated neighbourhood identities and aliases, explicit city
-filters, property-level place membership, concurrency/load tests, and relevance
-evaluation. Global geographic use would also require testing cell polygons that
-cross the antimeridian and careful coverage-bound calculations there.
+`POST /api/properties` accepts `title`, `location_name`, `lat`, `lng`, `price`,
+`bedrooms`, and `bathrooms`.
 
-References: [H3 cell statistics](https://h3geo.org/docs/core-library/restable/),
-[PostGIS ST_DWithin](https://postgis.net/docs/ST_DWithin.html).
+![Property creation flow from coordinates to bucket assignment and listing storage](property_flow.png)
+
+The route validates the input and calls the property repository. The repository
+creates or finds the bucket, registers aliases, and inserts the property in
+**one transaction**. A failure rolls back all of those writes.
+
+Unique constraints and conflict handling prevent concurrent requests from
+creating duplicate cells or aliases. Repeated POST requests still create
+separate listings.
+
+## Search Flow
+
+`GET /api/properties/search?location=sangotedo`
+
+![Property creation flow from coordinates to bucket assignment and listing storage](search_flow.png)
+
+Results include `items`, `total`, `limit`, and `offset`. The default page size
+is 50, capped at 100, ordered by creation time and ID. No match returns an empty
+list. All matching buckets are considered; we do not automatically add neighbours.
+
+The required three inputs—`Sangotedo` at `(6.4698, 3.6285)`, `Sangotedo, Ajah`
+at `(6.4720, 3.6301)`, and `sangotedo lagos` at `(6.4705, 3.6290)`—all register
+`sangotedo`. Searching that name returns all three properties.
+
+## Bucket Stats
+
+`GET /api/geo-buckets/stats` returns total buckets, total properties, a page of
+property counts per bucket, and coverage.
+
+Coverage means the summed area of occupied H3 cells in km², together with the
+bounding box of property coordinates. It is not building footprint area or an
+official neighbourhood boundary. Empty data returns zero area and null bounds.
+
+Counts are calculated from the tables rather than stored as counters. This keeps
+writes simple, although exact totals and coverage become more expensive as data
+grows. Separate stats queries can also see slightly different totals during
+concurrent writes.
+
+## Tests and Sample Data
+
+Unit tests mock repository calls and verify API validation and responses.
+Integration tests use Testcontainers with real PostGIS, apply migrations, and
+exercise the API through TestClient.
+
+They cover the three Sangotedo inputs, case differences, typos, unrelated areas,
+adjacent cells, pagination, counts, foreign keys, and transaction rollback.
+`seed.py` adds the three Sangotedo examples, Ikeja, and Victoria Island. Fixed
+property IDs make it safe to rerun with `make seed`.
+
+## Trade-offs and Scaling
+
+At 500,000 properties, text matching still runs against aliases, and property
+retrieval uses indexed bucket IDs. Indexes help, but response time still depends
+on how many buckets and properties match. Exact counts and large offsets remain
+costs. Measure representative queries before adding cached stats or cursor-based
+pagination.
+
+The main limitation is boundary accuracy: a matched cell can contain properties
+labelled as another neighbourhood. With more time, named neighbourhood polygons
+and a city hierarchy would support precise membership and broader searches.
+
+Alternatives considered:
+
+- **Radius searches:** PostGIS can perform indexed distance queries, but text
+  searches still need a known coordinate and a rule for choosing the radius.
+- **Administrative polygons:** clearer boundaries where reliable data exists,
+  but informal neighbourhoods may not have published boundaries.
+- **Larger H3 cells:** fewer buckets, but more unrelated areas grouped together.
