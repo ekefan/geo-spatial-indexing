@@ -11,6 +11,7 @@ dependencies = [
     "alembic>=1.19.2",
     "fastapi[standard]>=0.141.1",
     "geoalchemy2>=0.20.0",
+    "h3>=4.5.0",
     "psycopg2-binary>=2.9.12",
     "psycopg[binary]>=3.3.5",
     "python-dotenv>=1.2.3",
@@ -23,8 +24,11 @@ package = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
 testpaths = ["tests"]
+filterwarnings = [
+    'ignore:The anyio\.abc\.BlockingPortal alias is deprecated, use anyio\.from_thread\.BlockingPortal instead\.:DeprecationWarning:starlette\.testclient',
+]
 markers = [
     "integration: requires a Docker daemon and starts PostgreSQL",
 ]
@@ -33,3 +37,10 @@ markers = [
 [build-system]
 requires = ["uv_build>=0.12.8,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.12.0",
+    "pytest>=9.1.1",
+    "testcontainers[postgres]>=4.15.0",
+]
