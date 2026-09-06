@@ -84,5 +84,3 @@ def downgrade() -> None:
     op.drop_table('bucket_aliases')
 
     op.drop_table('geo_buckets')
-
-    op.execute("DROP EXTENSION IF EXISTS pg_trgm")

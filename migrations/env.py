@@ -8,13 +8,19 @@ from sqlalchemy import pool
 from alembic import context
 from database.models import Base
 from dotenv import load_dotenv
+from alembic.util import CommandError
+from copy import copy
+from geoalchemy2 import Geography, Geometry, alembic_helpers
 
 load_dotenv()
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-config.set_main_option("sqlalchemy.url", os.environ["DATABASE_DSN"])
+database_dsn = os.environ.get("DATABASE_DSN")
+if not database_dsn:
+    raise CommandError("Set DATABASE_DSN in your environment or .env file")
+config.set_main_option("sqlalchemy.url", database_dsn.replace("%", "%%"))
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
@@ -72,6 +78,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         include_object=include_object,
+        render_item=render_item,
     )
 
     with context.begin_transaction():
@@ -96,10 +103,18 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             include_object=include_object,
+            render_item=render_item,
         )
 
         with context.begin_transaction():
             context.run_migrations()
+
+
+def render_item(type_, obj, autogen_context):
+    if type_ == "type" and isinstance(obj, (Geography, Geometry)):
+        obj = copy(obj)
+        obj.spatial_index = False
+    return alembic_helpers.render_item(type_, obj, autogen_context)
 
 
 if context.is_offline_mode():
