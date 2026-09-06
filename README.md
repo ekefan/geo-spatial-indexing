@@ -31,7 +31,6 @@ Cool!! Project Setup is complete.
 ```bash
 uv run pytest tests/unit -q
 uv run pytest -m integration -q
-uv run pytest -m live -v
 uv run pytest -q
 ```
 
@@ -41,3 +40,8 @@ container, apply Alembic migrations, and check the schema before testing real
 queries. Docker must be available; Testcontainers pulls images if necessary and
 removes its containers afterward. No local database or Compose service is needed.
 The test suite ignores your application `DATABASE_DSN` and never uses its rows.
+
+Integration tests use FastAPI's TestClient with real PostGIS sessions, including
+all three Sangotedo addresses, typo matching, and repeated Python seeding.
+No separate HTTP server is started during tests.
+
