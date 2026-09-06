@@ -11,13 +11,24 @@ dependencies = [
     "alembic>=1.19.2",
     "fastapi[standard]>=0.141.1",
     "geoalchemy2>=0.20.0",
+    "psycopg2-binary>=2.9.12",
     "psycopg[binary]>=3.3.5",
     "python-dotenv>=1.2.3",
     "sqlalchemy>=2.0.52",
 ]
 
-[project.scripts]
-geo-spatial-indexing = "geo_spatial_indexing:main"
+[tool.uv]
+package = false
+
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: requires a Docker daemon and starts PostgreSQL",
+]
+
 
 [build-system]
 requires = ["uv_build>=0.12.8,<0.13.0"]
