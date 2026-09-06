@@ -27,6 +27,8 @@ cell deliberately approximates neighbourhood membership.
 
 ## Schema and indexes
 
+![Database schema showing properties, geo buckets, and bucket aliases](db_schema.png)
+
 ```text
 geo_buckets (UUID PK, unique H3 cell, centroid, boundary)
     | 1                         | 1
