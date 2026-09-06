@@ -75,8 +75,8 @@ class Property(Base):
     lat: Mapped[float] = mapped_column(Double)
     lng: Mapped[float] = mapped_column(Double)
     price: Mapped[int] = mapped_column(BigInteger)
-    currency: Mapped[str] = mapped_column(Text)
-    currency_unit_multiplier: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(Text, default="NGN")
+    currency_unit_multiplier: Mapped[int] = mapped_column(Integer, default=100)
     bedrooms: Mapped[int] = mapped_column(Integer)
     bathrooms: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
