@@ -1,0 +1,19 @@
+[project]
+name = "geo-spatial-indexing"
+version = "0.1.0"
+description = "Expert Listing Stage Two: Geo-spatial indexing and location normalization"
+readme = "README.md"
+authors = [
+    { name = "Emmanuel Ebenezer", email = "ekefan.dev@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+]
+
+[project.scripts]
+geo-spatial-indexing = "geo_spatial_indexing:main"
+
+[build-system]
+requires = ["uv_build>=0.12.8,<0.13.0"]
+build-backend = "uv_build"
