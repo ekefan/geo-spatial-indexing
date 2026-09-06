@@ -1,4 +1,4 @@
-# Geo-spatial property indexing and Retrieval
+# Geo-spatial Property Indexing and Retrieval
 
 This task is focused on designing and implementing a geo-bucket based location normalization system for property search.
 Read [DESIGN.md](DESIGN.md) for architecture, bucketing strategy, database schema, location matching logic and operation flow of the system.
