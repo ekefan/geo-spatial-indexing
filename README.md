@@ -3,6 +3,10 @@
 This task is focused on designing and implementing a geo-bucket based location normalization system for property search.
 Read [DESIGN.md](DESIGN.md) for architecture, bucketing strategy, database schema, location matching logic and operation flow of the system.
 
+## Walkthrough Video
+
+[![Watch the walkthrough video](walkthrough.png)](https://youtu.be/fTxifYdzqXk)
+
 ## Project Structure
 
 ```text
@@ -66,8 +70,8 @@ bash install-tools.sh
 ```bash
 uv sync
 cp .env.example .env
-docker compose up -d --wait postgres
-uv run alembic upgrade head
+docker compose up -d --wait postgres && 
+uv run alembic upgrade head && 
 make seed
 uv run uvicorn main:app --app-dir src --reload
 ```
